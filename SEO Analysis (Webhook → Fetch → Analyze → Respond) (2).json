@@ -1,0 +1,1401 @@
+{
+  "name": "SEO Analysis (Webhook → Fetch → Analyze → Respond)",
+  "nodes": [
+    {
+      "parameters": {
+        "fields": {
+          "values": [
+            {
+              "name": "html",
+              "stringValue": "={{$json.data || $json.body || ''}}"
+            },
+            {
+              "name": "url",
+              "stringValue": "={{ $('Code: Filter New URLs').item.json.url }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "6c2b517c-f360-47ed-b222-60f7f110aa8b",
+      "name": "Set (html ← data, keep url)",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [
+        96,
+        336
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "/**\n * expects: $json.url (string), $json.html (string)\n * returns: one item with SEO metrics\n */\n\nfunction pick(re, html) {\n  const m = html.match(re);\n  return m ? m[1].trim() : '';\n}\nfunction textOnly(html) {\n  let s = html\n    .replace(/<script[\\s\\S]*?<\\/script>/gi, '')\n    .replace(/<style[\\s\\S]*?<\\/style>/gi, '')\n    .replace(/<!--[\\s\\S]*?-->/g, '');\n  s = s.replace(/<[^>]+>/g, ' ').replace(/\\s+/g, ' ').trim();\n  return s;\n}\nfunction countImagesWithoutAlt(html) {\n  const imgs = html.match(/<img\\b[^>]*>/gi) || [];\n  let noAlt = 0;\n  for (const tag of imgs) {\n    const alt = (tag.match(/\\balt\\s*=\\s*(\"([^\"]*)\"|'([^']*)'|([^\\s>]+))/i) || [])[0];\n    const hasAlt = !!alt && !/\\balt\\s*=\\s*(\"\"\\s*|''\\s*)/i.test(alt);\n    if (!hasAlt) noAlt++;\n  }\n  return noAlt;\n}\nfunction hostOf(u) {\n  try { return new URL(u).hostname.toLowerCase(); }\n  catch { return ''; }\n}\n\n// ---- read inputs ----\nconst url  = String($json.url || '').trim();\nconst html = String($json.html || $json.data || $json.body || '').trim();\nconst analyzed_at = new Date().toISOString();\n\nif (!html) {\n  return {\n    json: {\n      url, analyzed_at,\n      title: '', title_length: 0,\n      meta_description: '', meta_length: 0,\n      h1_count: 0, word_count: 0,\n      images_without_alt: 0, canonical: 'Missing', noindex: false,\n      issues: 'HTML could not be fetched.',\n      seo_score: 0\n    }\n  };\n}\n\n// ---- extract ----\nconst title = pick(/<title[^>]*>([\\s\\S]*?)<\\/title>/i, html);\nconst meta  = pick(/<meta[^>]*name=[\"']description[\"'][^>]*content=[\"']([\\s\\S]*?)[\"']/i, html)\n           || pick(/<meta[^>]*property=[\"']og:description[\"'][^>]*content=[\"']([\\s\\S]*?)[\"']/i, html);\nconst canonical = pick(/<link[^>]*rel=[\"']canonical[\"'][^>]*href=[\"']([\\s\\S]*?)[\"']/i, html) || 'Missing';\nconst robots = pick(/<meta[^>]*name=[\"']robots[\"'][^>]*content=[\"']([\\s\\S]*?)[\"']/i, html);\nconst noindex = /noindex/i.test(robots);\n\nconst h1s = html.match(/<h1[\\s\\S]*?<\\/h1>/gi) || [];\nconst h1_count = h1s.length;\n\nconst txt = textOnly(html);\nconst word_count = txt ? txt.split(/\\s+/).filter(Boolean).length : 0;\n\nconst images_without_alt = countImagesWithoutAlt(html);\n\n// ---- issues ----\nconst issues = [];\n\nconst title_length = title.length;\nif (!title) issues.push('Title is missing.');\nelse if (title_length < 30) issues.push('Title is too short (<30).');\nelse if (title_length > 60) issues.push('Title is too long (>60).');\n\nconst meta_length = meta.length;\nif (!meta) issues.push('Meta description is missing.');\nelse if (meta_length < 120) issues.push('Meta description is short (<120).');\n\nif (h1_count === 0) issues.push('H1 tag is missing.');\nelse if (h1_count > 1) issues.push('Multiple H1 tags detected.');\n\nif (word_count < 100) issues.push('Very thin content (<100 words).');\nelse if (word_count < 300) issues.push('Thin content (<300 words).');\n\nif (canonical === 'Missing') {\n  issues.push('Canonical tag is missing.');\n} else if (hostOf(url) && hostOf(canonical) && hostOf(url) !== hostOf(canonical)) {\n  issues.push('Canonical points to a different domain.');\n}\n\nif (noindex) issues.push('Page is noindex.');\n\nif (images_without_alt > 0) issues.push(`${images_without_alt} image(s) missing ALT.`);\n\n// ---- score ----\nlet score = 100;\nif (!title) score -= 25; else if (title_length < 30 || title_length > 60) score -= 10;\nif (!meta) score -= 20; else if (meta_length < 120) score -= 10;\nif (h1_count === 0) score -= 15;\nif (h1_count > 1) score -= 10;\nif (word_count < 100) score -= 25; else if (word_count < 300) score -= 15;\nif (canonical === 'Missing') score -= 10;\nif (canonical !== 'Missing' && hostOf(url) && hostOf(canonical) && hostOf(url) !== hostOf(canonical)) score -= 15;\nif (noindex) score -= 30;\nscore -= Math.min(10, images_without_alt * 1);\nscore = Math.max(0, Math.min(100, Math.round(score)));\n\nreturn {\n  json: {\n    url,\n    analyzed_at,\n    title,\n    title_length,\n    meta_description: meta,\n    meta_length,\n    h1_count,\n    word_count,\n    images_without_alt,\n    canonical,\n    noindex,\n    issues: issues.join(' | '),\n    seo_score: score\n  }\n};\n"
+      },
+      "id": "655563e0-ee16-4b65-8d13-d55decd9ee81",
+      "name": "Code: Analyze SEO (All Items)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        288,
+        336
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Tüm item'ları tek bir JSON içinde topla\nconst arr = $input.all().map(i => i.json);\nreturn [{ json: { success: true, results: arr } }];\n"
+      },
+      "id": "b05318d2-7c39-4ce3-8ca8-fb67c05b2646",
+      "name": "Code: Wrap Results → single item",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        336
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{$json}}",
+        "options": {}
+      },
+      "id": "9fffac1b-1758-4ced-bd51-8f9c64ca52e4",
+      "name": "Respond to Webhook (JSON)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        624,
+        192
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "options": {
+          "redirect": {
+            "redirect": {}
+          },
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          },
+          "timeout": 17000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -64,
+        336
+      ],
+      "id": "208051c1-b624-42bd-9da3-102ca40b7094",
+      "name": "HTTP Request"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Mevcut Analyze SEO çıktısını al\nconst items = $input.all();\n\n// URL'i mümkün olan alanlardan bul\nconst pickUrl = (obj) =>\n  obj?.url ?? obj?.URL ?? obj?.page_url ?? obj?.pageUrl ??\n  obj?.href ?? obj?.link ?? obj?.site ?? obj?.domain ?? obj?.originalUrl ?? '';\n\n// Belirli bir index için önce kendi json'undan dene, yoksa önceki node'dan getir\nfunction resolveUrl(itemJson, index) {\n  // 1) Bu item'ın içinde varsa\n  let u = pickUrl(itemJson);\n  if (u) return u;\n\n  // 2) Aynı index'te önceki node'lardan çek (adları kendi flow’una göre düzelt)\n  // En güveniliri \"Set (html ← data, keep url)\" node'udur\n  try {\n    u = pickUrl($item(index, 'Set (html ← data, keep url)').$json);\n    if (u) return u;\n  } catch {}\n\n  // Alternatif kaynaklar (gerekirse aç)\n  try {\n    if (!u) u = pickUrl($item(index, 'HTTP Request').$json);\n  } catch {}\n  try {\n    if (!u) u = pickUrl($item(index, 'Code: Expand URLs → items').$json);\n  } catch {}\n\n  return u || '';\n}\n\n// Düzleştir & URL'i ekle\nconst out = [];\n\nitems.forEach((item, i) => {\n  const j = item.json;\n  const url = resolveUrl(j, i);\n\n  // Eğer çıktıda dizi tutan bir alan varsa (ör. j.results), onu da satırlara aç\n  // Yoksa tek satır olarak ver\n  if (Array.isArray(j.results)) {\n    j.results.forEach(r => {\n      out.push({ json: { url, ...r } });\n    });\n  } else {\n    out.push({ json: { url, ...j } });\n  }\n});\n\nreturn out;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        656,
+        336
+      ],
+      "id": "03dfcfbb-44f8-4b5e-a6a4-0fc48cd8e3b4",
+      "name": "Code: Flatten Results"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1.1,
+      "position": [
+        816,
+        416
+      ],
+      "id": "f147d41b-b449-4c5d-aa14-04917fe621ef",
+      "name": "Convert to File"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all(); // trend alanları eklenmiş son item'lar\nfunction fmtDelta(d) {\n  if (d === null || d === undefined) return '—';\n  const s = d > 0 ? `+${d}` : `${d}`;\n  return s;\n}\n\nlet rows = items.map(i => {\n  const j = i.json;\n  return `\n    <tr>\n      <td style=\"padding:6px 10px;\"><a href=\"${j.url}\" target=\"_blank\">${j.url}</a></td>\n      <td style=\"padding:6px 10px;text-align:center;\">${j.seo_score}</td>\n      <td style=\"padding:6px 10px;text-align:center;\">${fmtDelta(j.delta)} ${j.trend_emoji || ''}</td>\n      <td style=\"padding:6px 10px;text-align:center;\">${j.trend_status || '—'}</td>\n    </tr>`;\n}).join('');\n\nconst html = `\n  <div style=\"font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;\">\n    <h2 style=\"margin:0 0 10px;\">Weekly SEO Report</h2>\n    <p style=\"margin:0 0 16px;opacity:.8;\">${new Date().toISOString()}</p>\n    <table style=\"border-collapse:collapse;min-width:720px;border:1px solid #e5e7eb;\">\n      <thead>\n        <tr style=\"background:#f8fafc;\">\n          <th style=\"padding:8px 10px;text-align:left;\">URL</th>\n          <th style=\"padding:8px 10px;\">Score</th>\n          <th style=\"padding:8px 10px;\">∆</th>\n          <th style=\"padding:8px 10px;\">Trend</th>\n        </tr>\n      </thead>\n      <tbody>${rows}</tbody>\n    </table>\n  </div>\n`;\n\nreturn [{ json: { summaryHTML: html } }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        832,
+        240
+      ],
+      "id": "13ff1227-c4cf-4bc2-b42e-4c42481c7e62",
+      "name": "Code: Build Summary"
+    },
+    {
+      "parameters": {
+        "numberInputs": 3
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        1040,
+        240
+      ],
+      "id": "35f0566a-f46b-42b6-bbb3-bb4eec5d1435",
+      "name": "Merge"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "https://docs.google.com/spreadsheets/d/1bXCDmmqtRkBhIj59GUhKZ-qYcXFjYnJO4XPMPJBia84/edit?pli=1&gid=0#gid=0",
+          "mode": "url"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Sheet1",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "timestamp": "={{ $json.time }}",
+            "url": "={{$json.url}}",
+            "seo_score": "={{ $json.score }}",
+            "title": "={{ $json.canonical }}",
+            "issues": "={{$json.issues}}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "timestamp",
+              "displayName": "timestamp",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "url",
+              "displayName": "url",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "seo_score",
+              "displayName": "seo_score",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "title",
+              "displayName": "title",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "issues",
+              "displayName": "issues",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "delta",
+              "displayName": "delta",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "trend_status",
+              "displayName": "trend_status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "emoji",
+              "displayName": "emoji",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        496,
+        64
+      ],
+      "id": "f2b15b7d-330a-4dea-ad5d-0348c0733595",
+      "name": "Append",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "eH72f9xkFzwul5m9",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "https://docs.google.com/spreadsheets/d/1bXCDmmqtRkBhIj59GUhKZ-qYcXFjYnJO4XPMPJBia84/edit?pli=1&gid=0#gid=0",
+          "mode": "url"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Sheet1",
+          "mode": "name"
+        },
+        "options": {
+          "dataLocationOnSheet": {
+            "values": {
+              "rangeDefinition": "detectAutomatically",
+              "readRowsUntil": "firstEmptyRow"
+            }
+          },
+          "outputFormatting": {
+            "values": {
+              "general": "UNFORMATTED_VALUE",
+              "date": "FORMATTED_STRING"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        1200,
+        64
+      ],
+      "id": "7865b2ea-077a-4cd5-a11d-a58259a6f639",
+      "name": "Get row(s) in sheet",
+      "alwaysOutputData": true,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "eH72f9xkFzwul5m9",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Kaynaktan gelen güncel analizler\nconst current =\n  ($items('Code: Flatten Results', 0, 0)?.map(i => i.json)) ??\n  $input.all().map(i => i.json);\n\n// Google Sheets geçmiş satırları\nconst historyRows =\n  ($items('Get row(s) in sheet', 0, 0)?.map(i => i.json)) ?? [];\n\n/* ----------------- yardımcılar ----------------- */\n\n// URL normalize (host lowercase, hash & query atılır, trailing slash temizlenir)\nfunction normalizeUrl(u) {\n  try {\n    const o = new URL(String(u).trim());\n    o.hash = '';           // #fragment at\n    o.search = '';         // tüm query parametrelerini at (UTM vs.)\n    o.pathname = (o.pathname || '/').replace(/\\/+$/, '') || '/';\n    return o.toString().toLowerCase();\n  } catch {\n    return String(u || '').trim().toLowerCase();\n  }\n}\n\n// sayıyı güvenli parse et\nconst toNum = (v) => {\n  const n = Number(v);\n  return Number.isFinite(n) ? n : NaN;\n};\n\n// zamanı güvenli parse et (ms)\nfunction toTs(v) {\n  if (v == null || v === '') return 0;\n  const p = Date.parse(v);\n  if (Number.isFinite(p)) return p;\n  const n = Number(v);\n  return Number.isFinite(n) ? n : 0;\n}\n\n/* ------------- geçmişi indeksle (URL -> en güncel skor) ------------- */\n\nconst lastScoreByUrl = new Map();\n\nfor (const r of historyRows) {\n  const rawUrl = (r.url || r.URL || r.Url || '').trim();\n  if (!rawUrl) continue;\n\n  const url = normalizeUrl(rawUrl);\n  const score =\n    toNum(r.seo_score ?? r.SEO_Score ?? r.score ?? r.Score);\n  const ts = toTs(r.timestamp || r.Timestamp);\n\n  const prev = lastScoreByUrl.get(url);\n  if (!prev || ts > prev.ts) {\n    lastScoreByUrl.set(url, {\n      score: Number.isFinite(score) ? score : null,\n      ts: ts || 0,\n    });\n  }\n}\n\n/* ----------------- trend hesapla ----------------- */\n\nconst out = [];\n\nfor (const item of current) {\n  const urlRaw = String(item.url || '').trim();\n  const url = normalizeUrl(urlRaw);\n\n  const curScore = toNum(item.seo_score);\n  const curTs = toTs(item.analyzed_at || item.timestamp);\n\n  // geçmişten en güncel skor (mümkünse curTs’den önce/aynı; yoksa en güncel)\n  const hist = lastScoreByUrl.get(url);\n  let prevScore = hist?.score ?? null;\n\n  // delta ve trend\n  let delta = null;\n  if (Number.isFinite(curScore) && prevScore != null && Number.isFinite(prevScore)) {\n    delta = Number((curScore - prevScore).toFixed(0));\n  }\n\n  let trend_status = 'same';\n  let trend_emoji = '➡️';\n  if (delta != null) {\n    if (delta >= 2) { trend_status = 'up';   trend_emoji = '⬆️'; }\n    else if (delta <= -2) { trend_status = 'down'; trend_emoji = '⬇️'; }\n  }\n\n  out.push({\n    json: {\n      ...item,             // url, title, issues, seo_score, analyzed_at vs. korunur\n      prev_score: prevScore,\n      delta,\n      trend_status,\n      trend_emoji,\n    }\n  });\n}\n\nreturn out;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1648,
+        352
+      ],
+      "id": "39d8adb0-343c-43e2-a63d-9748800a6e71",
+      "name": "Code: Compute Trend"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Her item'ı al\nconst items = $input.all();\nconst out = [];\n\n// küçük yardımcılar\nconst num = (v, d = 0) => {\n  const n = Number(v);\n  return Number.isFinite(n) ? n : d;\n};\nconst str = (v, d = '') => (v == null ? d : String(v));\n\nfor (const it of items) {\n  const data = it.json || {};\n\n  // Kaynak alanları normalize et\n  const url          = str(data.url || data.URL).trim();\n  const timestamp    = str(data.analyzed_at) || new Date().toISOString();\n\n  const seo_score    = num(data.seo_score, 0);\n  const prev_score   = Number.isFinite(num(data.prev_score, NaN)) ? num(data.prev_score) : null;\n  const delta        = (prev_score == null) ? null : Math.round(seo_score - prev_score);\n\n  const trend_status = str(data.trend_status || (delta != null\n                         ? (delta >= 2 ? 'up' : (delta <= -2 ? 'down' : 'same'))\n                         : 'same'));\n\n  const title        = str(data.title);\n  const title_length = num(data.title_length, title.length);\n  const meta_length  = num(data.meta_length ?? data.meta_description_length, 0);\n  const h1_count     = num(data.h1_count ?? (data.h1_tag ? 1 : 0), 0);\n  const img_no_alt   = num(data.images_without_alt ?? data.images_no_alt, 0);\n  const word_count   = num(data.word_count, 0);\n  const canonical    = str(data.canonical || (data.canonical_url ? 'Present' : 'Missing'));\n\n  const recs   = [];\n  const actions = [];\n\n  // Kurallar\n  if (title_length < 30) {\n    recs.push(\"Title is too short (under 30 characters).\");\n    actions.push(\"Make title 30–60 chars; include the primary keyword.\");\n  } else if (title_length > 60) {\n    recs.push(\"Title is too long (over 60 characters).\");\n    actions.push(\"Shorten the title for better search visibility.\");\n  }\n\n  if (!data.meta_description || meta_length < 120) {\n    recs.push(\"Meta description missing or too short.\");\n    actions.push(\"Write a clear 120–160 character meta description.\");\n  }\n\n  if (!h1_count) {\n    recs.push(\"Missing H1 tag.\");\n    actions.push(\"Add a single H1 at the top with the target keyword.\");\n  }\n\n  if (img_no_alt > 0) {\n    recs.push(`${img_no_alt} image(s) missing ALT text.`);\n    actions.push(\"Add descriptive ALT text to non-decorative images.\");\n  }\n\n  if (word_count < 300) {\n    recs.push(\"Content too thin (<300 words).\");\n    actions.push(\"Add helpful details, FAQs, and descriptive text to increase depth.\");\n  }\n\n  if (canonical === \"Missing\") {\n    recs.push(\"Canonical tag missing.\");\n    actions.push(\"Add <link rel=\\\"canonical\\\"> in <head> for the preferred URL.\");\n  }\n\n  if (trend_status === \"down\" || (delta != null && delta <= -2)) {\n    recs.push(\"SEO score dropped vs. last run.\");\n    actions.push(\"Review recent changes; check broken links or removed content.\");\n  }\n\n  // “Issues” kolonuna mevcut bulguları koy (varsa data.issues’u koru)\n  const issues = str(\n    data.issues,\n    [\n      (title_length < 30 && \"Title too short\") || (title_length > 60 && \"Title too long\") || null,\n      (!data.meta_description || meta_length < 120) ? \"Meta description missing/short\" : null,\n      (!h1_count ? \"Missing H1\" : null),\n      (img_no_alt > 0 ? `${img_no_alt} image(s) missing ALT` : null),\n      (word_count < 300 ? \"Thin content\" : null),\n      (canonical === \"Missing\" ? \"Canonical missing\" : null)\n    ].filter(Boolean).join(\" | \")\n  );\n\n  if (recs.length === 0) {\n    recs.push(\"No major issues detected ✅\");\n    actions.push(\"Keep content fresh and monitor weekly trends.\");\n  }\n\n  out.push({\n    json: {\n      timestamp,       // <-- Sheets’te “timestamp” kolonu için\n      url,\n      seo_score,\n      prev_score,      // geçmiş skor (varsa)\n      delta,           // skor farkı (varsa)\n      trend_status,\n      issues,\n      recommendations: recs.join(\" | \"),\n      action_steps: actions.join(\" | \"),\n      // istersen raporlama için ek alanlar:\n      title,\n      word_count,\n      h1_count,\n      canonical\n    }\n  });\n}\n\nreturn out;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1824,
+        352
+      ],
+      "id": "954f0cc7-c460-4ffc-ab93-4c2372eff990",
+      "name": "Code: Generate Recommendations"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "https://docs.google.com/spreadsheets/d/1bXCDmmqtRkBhIj59GUhKZ-qYcXFjYnJO4XPMPJBia84/edit?pli=1&gid=1181772014#gid=1181772014",
+          "mode": "url"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 1181772014,
+          "mode": "list",
+          "cachedResultName": "Recom",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1bXCDmmqtRkBhIj59GUhKZ-qYcXFjYnJO4XPMPJBia84/edit#gid=1181772014"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "timestamp": "={{ $json.timestamp }}",
+            "url": "={{$json.url}}",
+            "trend_status": "={{$json.trend_status}}",
+            "issues": "={{$json.issues}}",
+            "recommendations": "={{$json.recommendations}}",
+            "action steps": "={{$json.action_steps}}",
+            "seo_score": "={{ $json.prev_score }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "timestamp",
+              "displayName": "timestamp",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "url",
+              "displayName": "url",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "seo_score",
+              "displayName": "seo_score",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "trend_status",
+              "displayName": "trend_status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "issues",
+              "displayName": "issues",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "recommendations",
+              "displayName": "recommendations",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "action steps",
+              "displayName": "action steps",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        1984,
+        352
+      ],
+      "id": "37276814-e989-4dae-ae4e-6c861bf6155a",
+      "name": "Append Recommendations",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "eH72f9xkFzwul5m9",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1.1,
+      "position": [
+        1552,
+        64
+      ],
+      "id": "57e701d9-9db1-43b7-9d1f-b2786775eddc",
+      "name": "Convert to File1"
+    },
+    {
+      "parameters": {
+        "fromEmail": "support@biteandbrand.co.uk",
+        "toEmail": "okan@biteandbrand.co.uk",
+        "subject": "=Weekly SEO Recommendations Report - {{ $now }}",
+        "html": "Hello 👋,\n\nHere are your SEO improvement recommendations based on the latest analysis.\n\nA CSV file is attached with detailed suggestions for each URL.\n\nBest,  \nBite & Brand SEO Automation\n",
+        "options": {
+          "attachments": "=data"
+        }
+      },
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1744,
+        64
+      ],
+      "id": "94529866-70d8-4edd-b2d8-ce13e0dda6dc",
+      "name": "Send email about Weekly Recommndations",
+      "webhookId": "86045c86-f28f-463e-8031-b2573402c919",
+      "credentials": {
+        "smtp": {
+          "id": "89BeKlJprlNTBORA",
+          "name": "SMTP account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fromEmail": "support@biteandbrand.co.uk",
+        "toEmail": "okan@biteandbrand.co.uk",
+        "subject": "=Weekly SEO Report - {{$now}}",
+        "html": "={{$json.summaryHTML}}",
+        "options": {
+          "attachments": "data"
+        }
+      },
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1200,
+        256
+      ],
+      "id": "e2996c59-61e7-4b7e-a12e-0c964202ce6f",
+      "name": "Send email about weekly trend",
+      "webhookId": "57ffe407-c6f2-4e79-afad-0e402372840e",
+      "credentials": {
+        "smtp": {
+          "id": "89BeKlJprlNTBORA",
+          "name": "SMTP account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "chooseBranch"
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        1472,
+        352
+      ],
+      "id": "5cdb065c-606b-4c1a-adc7-a9a6c091b065",
+      "name": "Merge1"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "86ed4982-92dd-411b-a47a-b823b2957e73",
+              "name": "root",
+              "value": "https://www.louluu.com",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -16,
+        1056
+      ],
+      "id": "19849bdc-daa3-4caa-ab34-c9200651d84a",
+      "name": "Root URL"
+    },
+    {
+      "parameters": {
+        "url": "={{$json.root.replace(/\\/+$/,'')}}/robots.txt",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        128,
+        816
+      ],
+      "id": "8f532fa4-af2d-4a56-abfa-8de09b05de41",
+      "name": "HTTP Request: Get robots.txt"
+    },
+    {
+      "parameters": {
+        "jsCode": "const txt = $json.data || $json.body || '';\nconst lines = txt.split(/\\r?\\n/);\nconst out = [];\n\nfor (const line of lines) {\n  const m = line.match(/^sitemap:\\s*(\\S+)/i);\n  if (m) out.push({ json: { sitemap: m[1].trim() } });\n}\n\n// Fallback: birden fazla yaygın yol dene (WP/Yoast/CORE)\nif (!out.length) {\n  const base = $items('Root URL')[0].json.root.replace(/\\/+$/,'');\n  const candidates = [\n    `${base}/sitemap.xml`,\n    `${base}/sitemap_index.xml`,\n    `${base}/wp-sitemap.xml`,\n  ];\n  // tekilleştir\n  const seen = new Set();\n  for (const u of candidates) {\n    if (seen.has(u)) continue;\n    seen.add(u);\n    out.push({ json: { sitemap: u } });\n  }\n}\n\nreturn out;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        288,
+        816
+      ],
+      "id": "99d3bc57-88a4-4482-8393-c99f97264e8f",
+      "name": "Code: Extract Sitemap URLs from robots.txt"
+    },
+    {
+      "parameters": {
+        "url": "={{$json.sitemap}}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "responseFormat": "file"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1056,
+        608
+      ],
+      "id": "95bb4e0e-a6fe-46bc-9082-4660019e358e",
+      "name": "HTTP Request: Fetch sitemap"
+    },
+    {
+      "parameters": {
+        "operation": "xml",
+        "binaryPropertyName": "XML",
+        "destinationKey": "parsed",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [
+        1424,
+        608
+      ],
+      "id": "9fb13905-3e56-4f17-8042-25285eb4bc87",
+      "name": "XML → JSON",
+      "alwaysOutputData": false
+    },
+    {
+      "parameters": {
+        "jsCode": "// XML → JSON node'undan gelen ham XML metni (veya binary'den çözülen dize)\nconst xml = String($json.parsed || $json.XML || $json.data || '').trim();\nconst out = [];\nif (!xml) {\n  return [{ json: { kind: 'none' } }];\n}\n\n// Basit entity decode\nconst decode = s => String(s).replace(/&amp;/g,'&').trim();\n\n// <loc> toplayıcı (hem urlset hem index için)\nconst collect = (txt, tag) => {\n  const re = new RegExp(`<${tag}>[\\\\s\\\\S]*?<\\\\/${tag}>`, 'gi');\n  const blocks = txt.match(re) || [];\n  const locs = [];\n  for (const b of blocks) {\n    const m = b.match(/<loc[^>]*>([\\s\\S]*?)<\\/loc>/i);\n    if (m) locs.push(decode(m[1]));\n  }\n  return locs;\n};\n\n// sitemapindex mi?\nconst isIndex = /<\\s*sitemapindex[\\s>]/i.test(xml);\nconst isUrlset = /<\\s*urlset[\\s>]/i.test(xml);\n\n// Çıkışları üret\nif (isIndex) {\n  for (const u of collect(xml, 'sitemap')) {\n    out.push({ json: { kind: 'sitemap', sitemap: u } });\n  }\n} else if (isUrlset) {\n  for (const u of collect(xml, 'url')) {\n    out.push({ json: { kind: 'page', url: u } });\n  }\n} else {\n  // Beklenmeyen gövde (404 sayfası vs.) → sessiz geç\n  out.push({ json: { kind: 'none' } });\n}\n\nreturn out;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1616,
+        608
+      ],
+      "id": "301de7b9-5e0d-4d2f-83d1-31cfec8d3184",
+      "name": "Code: Normalize sitemap content to URLs or inner sitemaps",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c2945e66-603f-459f-8ac2-69a9d8d95909",
+              "leftValue": "={{$json.kind}}",
+              "rightValue": "=sitemap",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1808,
+        608
+      ],
+      "id": "509689c9-fc05-4d65-ac41-bfbf2efa4cab",
+      "name": "IF: kind == sitemap ?"
+    },
+    {
+      "parameters": {
+        "batchSize": 30,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        800,
+        592
+      ],
+      "id": "eaedc308-318b-4cc6-8e09-6beb95f56900",
+      "name": "Split In Batches (Sitemap urls)"
+    },
+    {
+      "parameters": {
+        "jsCode": "const seen = new Set();\nconst out = [];\n\nfor (const it of $input.all()) {\n  const u = String(it.json.url || '').trim();\n  if (!u || seen.has(u)) continue;\n  seen.add(u);\n  out.push({ json: { url: u } });\n}\nreturn out;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1456,
+        832
+      ],
+      "id": "89f22e57-f756-4cbd-aa70-f7baff209c97",
+      "name": "Item Lists → Filter & Unique"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "ce2f01e9-f3e3-4461-93bc-be91d26df520",
+              "name": "XML",
+              "value": "data",
+              "type": "binary"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1248,
+        608
+      ],
+      "id": "ab8c65aa-e874-48de-bbb2-77e2b01fb097",
+      "name": "Prepare XML"
+    },
+    {
+      "parameters": {
+        "batchSize": 100,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1392,
+        1040
+      ],
+      "id": "ed15b849-8bc4-4363-9089-1cd490b12b15",
+      "name": "Split in Batches (pages)",
+      "notesInFlow": false,
+      "retryOnFail": false,
+      "executeOnce": false,
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "amount": 3
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        -192,
+        336
+      ],
+      "id": "e8865be2-a636-4812-a62a-b74f662eb3a3",
+      "name": "Wait",
+      "webhookId": "4604f94a-c8f9-494b-b0a5-f325fab29665"
+    },
+    {
+      "parameters": {
+        "jsCode": "/**\n * Normalize page URLs (no dependency on Root URL node / global URL())\n * - Derives root from the first absolute URL in input\n * - Keeps same-domain URLs, drops static assets, de-dupes\n */\n\nconst items = $input.all();\nif (!items.length) return [];\n\n// --- helpers ---\nconst protoHost = (u) => {\n  const m = String(u).match(/^([a-zA-Z][\\w+.-]*:\\/\\/[^\\/?#]+)/);\n  return m ? m[1] : '';\n};\nconst hostOf = (u) => {\n  const m = String(u).match(/^[a-zA-Z][\\w+.-]*:\\/\\/([^\\/?#]+)/);\n  return m ? m[1].toLowerCase() : '';\n};\nconst absUrl = (u, base) => {\n  if (!u) return '';\n  u = String(u).trim();\n  if (!u) return '';\n\n  // protocol-relative\n  if (u.startsWith('//')) {\n    const proto = (base.split(':')[0] || 'https');\n    return `${proto}:${u}`;\n  }\n  // root-relative\n  if (u.startsWith('/')) {\n    const bh = protoHost(base);\n    return bh ? bh + u : '';\n  }\n  // already absolute\n  if (/^[a-zA-Z][\\w+.-]*:\\/\\//.test(u)) return u;\n\n  // relative path\n  const baseDir = base.replace(/\\/[^\\/]*$/, '');\n  return `${baseDir}/${u}`;\n};\n\n// 1) Ağız birliği için kökü bul (ilk absolute URL'den)\nlet rootBase = '';\nfor (const it of items) {\n  const cand = it.json?.url ?? it.json?.loc ?? it.json?.page ?? '';\n  if (/^[a-zA-Z][\\w+.-]*:\\/\\//.test(String(cand))) {\n    rootBase = protoHost(String(cand));\n    if (rootBase) break;\n  }\n}\nif (!rootBase) {\n  // Hâlâ yoksa ilk elemanı absolute’a çevirirken fallback olarak https kullan\n  const any = items[0]?.json?.url ?? items[0]?.json?.loc ?? items[0]?.json?.page ?? '';\n  const h = hostOf(`https://${String(any).replace(/^https?:\\/\\//, '')}`);\n  if (!h) throw new Error('Root host could not be derived from input.');\n  rootBase = `https://${h}`;\n}\nconst rootHost = hostOf(rootBase);\n\n// 2) İşle ve filtrele\nconst seen = (globalThis.__seenPages = globalThis.__seenPages || new Set());\nconst out = [];\n\nfor (const it of items) {\n  let u = it.json?.url ?? it.json?.loc ?? it.json?.page ?? '';\n  u = absUrl(u, rootBase);\n  if (!u) continue;\n\n  // normalize: strip hash & query & trailing slashes\n  u = u.split('#')[0].split('?')[0].replace(/\\/+$/, '');\n\n  // same-domain only\n  const h = hostOf(u);\n  if (h && h !== rootHost) continue;\n\n  // skip static assets\n  if (/\\.(?:pdf|jpe?g|png|gif|svg|webp|css|js|zip|mp4|mp3|woff2?|ico)$/i.test(u)) continue;\n\n  // dedupe\n  if (seen.has(u)) continue;\n  seen.add(u);\n\n  out.push({ json: { url: u } });\n}\n\nreturn out;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2016,
+        624
+      ],
+      "id": "de1cc87b-5a37-4010-818d-203ae0ca4bff",
+      "name": "Code: Normalize URL pageler icin",
+      "executeOnce": false,
+      "alwaysOutputData": false,
+      "retryOnFail": false
+    },
+    {
+      "parameters": {
+        "jsCode": "// --- Yardımcı: URL normalize ---\nfunction norm(u) {\n  try {\n    let s = String(u || '').trim();\n    if (!s) return '';\n    // çift tırnak vs. temizle\n    s = s.replace(/^\"+|\"+$/g, '');\n    // lower-case\n    s = s.toLowerCase();\n    // #fragment ve ?query at\n    s = s.split('#')[0].split('?')[0];\n    // 'www.' normalize (opsiyonel)\n    s = s.replace(/^https?:\\/\\/(www\\.)?/, 'https://');\n    // sondaki / işaretini kaldır (kök \"/\" hariç)\n    s = s.replace(/(?<=.)\\/$/, '');\n    return s;\n  } catch (e) { return ''; }\n}\n\n// --- Sheet’ten geçmiş URL’leri topla (node adı birebir aynı olmalı!) ---\nconst histItems = $items('Get row(s) in sheet (for filter)', 0, 0);\nconst seen = new Set();\n\nfor (const it of histItems) {\n  const r = it.json;\n  const u =\n    r?.url ?? r?.URL ?? r?.Url ??\n    r?.values?.[1] ?? r?.[1] ?? '';     // başlık yoksa ikinci sütun ör.\n  const n = norm(u);\n  if (n) seen.add(n);\n}\n\n// --- Merge/önceki adımdan gelen adaylar ---\nconst out = [];\nfor (const it of $input.all()) {\n  const n = norm(it.json?.url);\n  if (!n) continue;\n  if (seen.has(n)) continue;            // Sheet’te varsa atla\n  out.push({ json: { url: n } });\n}\n\n// İpucu: Bu düğüm boş dönebilir. Akışın durmasını istemiyorsan\n// node Settings -> Always Output Data = ON yap.\nreturn out;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1168,
+        1040
+      ],
+      "id": "cbcd92c4-b7e0-4841-8ecd-999a493a33b6",
+      "name": "Code: Filter New URLs",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "fieldsToMatchString": "url",
+        "joinMode": "keepNonMatches",
+        "options": {
+          "fuzzyCompare": true
+        }
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        928,
+        1040
+      ],
+      "id": "28fc80f1-fafa-4be6-a5c5-6ef49e309748",
+      "name": "Merge wait for both",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1bXCDmmqtRkBhIj59GUhKZ-qYcXFjYnJO4XPMPJBia84",
+          "mode": "list",
+          "cachedResultName": "SEO_Trend_History",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1bXCDmmqtRkBhIj59GUhKZ-qYcXFjYnJO4XPMPJBia84/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1bXCDmmqtRkBhIj59GUhKZ-qYcXFjYnJO4XPMPJBia84/edit#gid=0"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        544,
+        1056
+      ],
+      "id": "63ae7971-ff84-497b-9cdb-fb93fc5811a1",
+      "name": "Get row(s) in sheet (for filter)",
+      "alwaysOutputData": true,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "lgPMEpFtXLZuVSX3",
+          "name": "Google Sheets account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// 1) Kaynak HTML\nconst html = String($json.data || $json.body || '');\n// 2) Kök & host\nconst root = String($items('Root URL')[0]?.json?.root || '').replace(/\\/+$/, '');\nlet host = '';\ntry { host = new URL(root).host.toLowerCase(); } catch {}\n\n// 3) Href'leri yakala\nconst hrefRe = /href\\s*=\\s*[\"']([^\"']+)[\"']/gi;\nconst seen = new Set();\nconst collected = [];\n\nlet m;\nwhile ((m = hrefRe.exec(html))) {\n  let href = (m[1] || '').trim();\n  if (!href || href.startsWith('#') || href.startsWith('mailto:') || href.startsWith('tel:')) continue;\n\n  // Relative -> absolute\n  let abs = '';\n  try { abs = new URL(href, root).href; } catch { continue; }\n\n  // Aynı host\n  let h = '';\n  try { h = new URL(abs).host.toLowerCase(); } catch {}\n  if (host && h && h !== host) continue;\n\n  // Statik dosyaları at\n  if (/\\.(?:pdf|jpe?g|png|gif|svg|webp|css|js|zip|mp4|mp3|woff2?)$/i.test(abs)) continue;\n\n  // Temizlik\n  abs = abs.replace(/[?#].*$/, '').replace(/\\/+$/, '');\n\n  if (!abs || seen.has(abs)) continue;\n  seen.add(abs);\n  collected.push(abs);\n}\n\n// 4) Sayfa türü filtresi (önce dar, boş kalırsa gevşet)\nconst pageLike = collected.filter(u =>\n  /(product|products|shop|category|blog|news|event|menu|about|page|services|service|portfolio|case|projects)/i.test(u)\n);\n\n// 5) Çıkış kararı\nlet finalList = pageLike.length ? pageLike : collected;   // hiç eşleşme yoksa tüm sayfaları kullan\nif (!finalList.length && root) finalList = [root];        // hâlâ boşsa kökü ver\n\nreturn finalList.map(url => ({ json: { url } }));\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1152,
+        832
+      ],
+      "id": "fd70923a-a0e2-488e-a1aa-6f8505c5fc36",
+      "name": "Code: Extract URLs"
+    },
+    {
+      "parameters": {
+        "url": "={{ $('Root URL').item.json.root }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        896,
+        832
+      ],
+      "id": "fa32328d-37b8-4185-ac90-6dba06bb2cea",
+      "name": "HTTP Request (Homepage)"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "ae9634b7-1964-4aa7-9182-5d7c7397523f",
+              "leftValue": "={{ $json.sitemap }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        464,
+        816
+      ],
+      "id": "32bbec27-8fa8-4ee9-8d1c-0522b9dda149",
+      "name": "If (Has sitemap?)"
+    },
+    {
+      "parameters": {
+        "jsCode": "const root = $items('Root URL')[0].json.root.replace(/\\/+$/,'');\nreturn [\n  { json: { sitemap: `${root}/sitemap.xml` }},\n  { json: { sitemap: `${root}/sitemap_index.xml` }},\n  { json: { sitemap: `${root}/wp-sitemap.xml` }}\n];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        688,
+        832
+      ],
+      "id": "d1f2497a-2758-4c53-8d3e-e4454f4e37ef",
+      "name": "Code: Build sitemap candidates (False koluna)"
+    },
+    {
+      "parameters": {
+        "jsCode": "/**\n * Filter NEW sitemap URLs to prevent infinite loop\n * - Keeps an in-execution memory on the node VM (globalThis)\n * - Dedupes across all passes of this node during the same run\n */\nconst mem = (globalThis.__seenSitemaps = globalThis.__seenSitemaps || new Set());\n\nconst out = [];\nfor (const it of $input.all()) {\n  const s = String(it.json?.sitemap || '').trim();\n  if (!s) continue;\n  if (mem.has(s)) continue;   // already processed in this run\n  mem.add(s);\n  out.push({ json: { sitemap: s } });\n}\n\nreturn out;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        512,
+        592
+      ],
+      "id": "b042dc26-b8af-4f18-abad-58b107df21a5",
+      "name": "Code: Filter New sitemaps"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Set (html ← data, keep url)": {
+      "main": [
+        [
+          {
+            "node": "Code: Analyze SEO (All Items)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: Analyze SEO (All Items)": {
+      "main": [
+        [
+          {
+            "node": "Code: Wrap Results → single item",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Append",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: Wrap Results → single item": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook (JSON)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Code: Flatten Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Respond to Webhook (JSON)": {
+      "main": [
+        []
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "Set (html ← data, keep url)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: Flatten Results": {
+      "main": [
+        [
+          {
+            "node": "Code: Build Summary",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Convert to File",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Convert to File": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Code: Build Summary": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Send email about weekly trend",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Append": {
+      "main": [
+        [
+          {
+            "node": "Get row(s) in sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get row(s) in sheet": {
+      "main": [
+        [
+          {
+            "node": "Convert to File1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge1",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Code: Compute Trend": {
+      "main": [
+        [
+          {
+            "node": "Code: Generate Recommendations",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Code: Generate Recommendations": {
+      "main": [
+        [
+          {
+            "node": "Append Recommendations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Convert to File1": {
+      "main": [
+        [
+          {
+            "node": "Send email about Weekly Recommndations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send email about weekly trend": {
+      "main": [
+        []
+      ]
+    },
+    "Send email about Weekly Recommndations": {
+      "main": [
+        []
+      ]
+    },
+    "Merge1": {
+      "main": [
+        [
+          {
+            "node": "Code: Compute Trend",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Root URL": {
+      "main": [
+        [
+          {
+            "node": "Get row(s) in sheet (for filter)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "HTTP Request: Get robots.txt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request: Get robots.txt": {
+      "main": [
+        [
+          {
+            "node": "Code: Extract Sitemap URLs from robots.txt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: Extract Sitemap URLs from robots.txt": {
+      "main": [
+        [
+          {
+            "node": "If (Has sitemap?)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request: Fetch sitemap": {
+      "main": [
+        [
+          {
+            "node": "Prepare XML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "XML → JSON": {
+      "main": [
+        [
+          {
+            "node": "Code: Normalize sitemap content to URLs or inner sitemaps",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: Normalize sitemap content to URLs or inner sitemaps": {
+      "main": [
+        [
+          {
+            "node": "IF: kind == sitemap ?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split In Batches (Sitemap urls)": {
+      "main": [
+        [],
+        [
+          {
+            "node": "HTTP Request: Fetch sitemap",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF: kind == sitemap ?": {
+      "main": [
+        [
+          {
+            "node": "Code: Filter New sitemaps",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code: Normalize URL pageler icin",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare XML": {
+      "main": [
+        [
+          {
+            "node": "XML → JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Item Lists → Filter & Unique": {
+      "main": [
+        [
+          {
+            "node": "Merge wait for both",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split in Batches (pages)": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Wait",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: Normalize URL pageler icin": {
+      "main": [
+        [
+          {
+            "node": "Item Lists → Filter & Unique",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: Filter New URLs": {
+      "main": [
+        [
+          {
+            "node": "Split in Batches (pages)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge wait for both": {
+      "main": [
+        [
+          {
+            "node": "Code: Filter New URLs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get row(s) in sheet (for filter)": {
+      "main": [
+        [
+          {
+            "node": "Merge wait for both",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Code: Extract URLs": {
+      "main": [
+        [
+          {
+            "node": "Item Lists → Filter & Unique",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request (Homepage)": {
+      "main": [
+        [
+          {
+            "node": "Code: Extract URLs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If (Has sitemap?)": {
+      "main": [
+        [
+          {
+            "node": "Split In Batches (Sitemap urls)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code: Build sitemap candidates (False koluna)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: Build sitemap candidates (False koluna)": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request (Homepage)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: Filter New sitemaps": {
+      "main": [
+        [
+          {
+            "node": "Split In Batches (Sitemap urls)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/London",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "versionId": "5a411355-74fd-4192-af0b-856ed0560b5d",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "8baf7435a45248a0cb509d9d303af78e38c7ec798fb1d5c4c410eedc7fca49ac"
+  },
+  "id": "FDtARgh4CxDf4ldr",
+  "tags": []
+}
