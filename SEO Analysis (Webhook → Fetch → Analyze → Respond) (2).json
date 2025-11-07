@@ -626,7 +626,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// XML → JSON node'undan gelen ham XML metni (veya binary'den çözülen dize)\nconst xml = String($json.parsed || $json.XML || $json.data || '').trim();\nconst out = [];\nif (!xml) {\n  return [{ json: { kind: 'none' } }];\n}\n\n// Basit entity decode\nconst decode = s => String(s).replace(/&amp;/g,'&').trim();\n\n// <loc> toplayıcı (hem urlset hem index için)\nconst collect = (txt, tag) => {\n  const re = new RegExp(`<${tag}>[\\\\s\\\\S]*?<\\\\/${tag}>`, 'gi');\n  const blocks = txt.match(re) || [];\n  const locs = [];\n  for (const b of blocks) {\n    const m = b.match(/<loc[^>]*>([\\s\\S]*?)<\\/loc>/i);\n    if (m) locs.push(decode(m[1]));\n  }\n  return locs;\n};\n\n// sitemapindex mi?\nconst isIndex = /<\\s*sitemapindex[\\s>]/i.test(xml);\nconst isUrlset = /<\\s*urlset[\\s>]/i.test(xml);\n\n// Çıkışları üret\nif (isIndex) {\n  for (const u of collect(xml, 'sitemap')) {\n    out.push({ json: { kind: 'sitemap', sitemap: u } });\n  }\n} else if (isUrlset) {\n  for (const u of collect(xml, 'url')) {\n    out.push({ json: { kind: 'page', url: u } });\n  }\n} else {\n  // Beklenmeyen gövde (404 sayfası vs.) → sessiz geç\n  out.push({ json: { kind: 'none' } });\n}\n\nreturn out;\n"
+        "jsCode": "// XML → JSON node'undan gelen içerik hem düz string hem de parse edilmiş obje olabilir\nconst parsed = $json.parsed;\nconst rawData = $json.data || $json.XML || '';\n\nconst out = [];\nconst seen = new Set();\n\nconst decode = (value) => String(value || '')\n  .replace(/^\"+|\"+$/g, '')\n  .replace(/&amp;/g, '&')\n  .trim();\n\nconst emit = (kind, value) => {\n  const url = decode(value);\n  if (!url) return;\n  const key = `${kind}|${url.toLowerCase()}`;\n  if (seen.has(key)) return;\n  seen.add(key);\n  if (kind === 'sitemap') out.push({ json: { kind: 'sitemap', sitemap: url } });\n  else out.push({ json: { kind: 'page', url } });\n};\n\nconst asString = (input) => {\n  if (typeof input === 'string') return input;\n  if (input && typeof input === 'object') {\n    if (input.data && typeof input.data === 'string') {\n      try { return Buffer.from(input.data, 'base64').toString('utf8'); }\n      catch { return ''; }\n    }\n  }\n  return '';\n};\n\n// 1) Eğer string XML geldiyse regex ile ayıkla\nconst xmlText = (typeof parsed === 'string' && parsed.trim()) ? parsed.trim()\n  : asString(rawData).trim();\n\nif (xmlText) {\n  const hasIndex = /<\\s*sitemapindex\\b/i.test(xmlText);\n  const hasUrlset = /<\\s*urlset\\b/i.test(xmlText);\n\n  if (hasIndex) {\n    const re = /<sitemap[\\s\\S]*?<loc[^>]*>([\\s\\S]*?)<\\/loc>/gi;\n    let m;\n    while ((m = re.exec(xmlText))) emit('sitemap', m[1]);\n  }\n  if (hasUrlset || (!hasIndex && !out.length)) {\n    const re = /<url[\\s\\S]*?<loc[^>]*>([\\s\\S]*?)<\\/loc>/gi;\n    let m;\n    while ((m = re.exec(xmlText))) emit('page', m[1]);\n  }\n}\n\n// 2) Parse edilmiş obje ise dolaşarak loc alanlarını yakala\nconst visited = new WeakSet();\nconst walk = (node, ctx = '') => {\n  if (!node) return;\n  if (visited.has(node)) return;\n  if (Array.isArray(node)) {\n    for (const item of node) walk(item, ctx);\n    return;\n  }\n  if (typeof node !== 'object') return;\n\n  visited.add(node);\n\n  const nextCtx = (key) => {\n    const lower = String(key || ctx || '').toLowerCase();\n    if (lower.includes('sitemap')) return 'sitemap';\n    if (lower.includes('url')) return 'url';\n    return ctx;\n  };\n\n  if (Object.prototype.hasOwnProperty.call(node, 'loc')) {\n    const locValue = node.loc;\n    const arr = Array.isArray(locValue) ? locValue : [locValue];\n    const kind = ctx === 'sitemap' ? 'sitemap' : (ctx === 'url' ? 'page' : 'page');\n    for (const value of arr) emit(kind, value);\n  }\n\n  for (const [key, value] of Object.entries(node)) {\n    if (key === 'loc') continue;\n    walk(value, nextCtx(key));\n  }\n};\n\nif (parsed && typeof parsed === 'object') walk(parsed);\n\nif (!out.length) return [{ json: { kind: 'none' } }];\nreturn out;"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -918,7 +918,7 @@
     },
     {
       "parameters": {
-        "jsCode": "/**\n * Filter NEW sitemap URLs to prevent infinite loop\n * - Keeps an in-execution memory on the node VM (globalThis)\n * - Dedupes across all passes of this node during the same run\n */\nconst mem = (globalThis.__seenSitemaps = globalThis.__seenSitemaps || new Set());\n\nconst out = [];\nfor (const it of $input.all()) {\n  const s = String(it.json?.sitemap || '').trim();\n  if (!s) continue;\n  if (mem.has(s)) continue;   // already processed in this run\n  mem.add(s);\n  out.push({ json: { sitemap: s } });\n}\n\nreturn out;\n"
+        "jsCode": "/**\n * Filter NEW sitemap URLs to prevent infinite loop\n * - Normalizes URL (scheme/host lower, strip query/hash/trailing slash)\n * - Keeps an in-execution memory on the node VM (globalThis)\n * - Dedupes across all passes of this node during the same run\n */\nfunction normalize(u) {\n  const trimmed = String(u || '').trim().replace(/^\"+|\"+$/g, '');\n  try {\n    const url = new URL(trimmed);\n    if (!/^https?:$/i.test(url.protocol)) return '';\n    url.hash = '';\n    url.search = '';\n    url.pathname = (url.pathname || '/').replace(/\\/+$/, '') || '/';\n    return url.toString().toLowerCase();\n  } catch (e) {\n    return trimmed.split('#')[0].split('?')[0].replace(/\\/+$/, '').toLowerCase();\n  }\n}\nconst mem = (globalThis.__seenSitemaps = globalThis.__seenSitemaps || new Set());\nconst out = [];\nfor (const it of $input.all()) {\n  const raw = String(it.json?.sitemap ?? it.json?.url ?? '').trim();\n  if (!raw) continue;\n  const key = normalize(raw);\n  if (!key) continue;\n  if (mem.has(key)) continue;   // already processed in this run\n  mem.add(key);\n  out.push({ json: { sitemap: raw } });\n}\nreturn out;"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -1204,14 +1204,14 @@
     },
     "Split In Batches (Sitemap urls)": {
       "main": [
-        [],
         [
           {
             "node": "HTTP Request: Fetch sitemap",
             "type": "main",
             "index": 0
           }
-        ]
+        ],
+        []
       ]
     },
     "IF: kind == sitemap ?": {
