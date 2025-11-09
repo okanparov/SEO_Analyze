@@ -674,20 +674,6 @@
     },
     {
       "parameters": {
-        "batchSize": 30,
-        "options": {}
-      },
-      "type": "n8n-nodes-base.splitInBatches",
-      "typeVersion": 3,
-      "position": [
-        800,
-        592
-      ],
-      "id": "eaedc308-318b-4cc6-8e09-6beb95f56900",
-      "name": "Split In Batches (Sitemap urls)"
-    },
-    {
-      "parameters": {
         "jsCode": "const seen = new Set();\nconst out = [];\n\nfor (const it of $input.all()) {\n  const u = String(it.json.url || '').trim();\n  if (!u || seen.has(u)) continue;\n  seen.add(u);\n  out.push({ json: { url: u } });\n}\nreturn out;\n"
       },
       "type": "n8n-nodes-base.code",
@@ -917,8 +903,7 @@
       "name": "Code: Build sitemap candidates (False koluna)"
     },
     {
-      "parameters": {
-        "jsCode": "/**\n * Filter NEW sitemap URLs to prevent infinite loop\n * - Normalizes URL (scheme/host lower, strip query/hash/trailing slash)\n * - Keeps an in-execution memory on the node VM (globalThis)\n * - Dedupes across all passes of this node during the same run\n */\nfunction normalize(u) {\n  const trimmed = String(u || '').trim().replace(/^\"+|\"+$/g, '');\n  try {\n    const url = new URL(trimmed);\n    if (!/^https?:$/i.test(url.protocol)) return '';\n    url.hash = '';\n    url.search = '';\n    url.pathname = (url.pathname || '/').replace(/\\/+$/, '') || '/';\n    return url.toString().toLowerCase();\n  } catch (e) {\n    return trimmed.split('#')[0].split('?')[0].replace(/\\/+$/, '').toLowerCase();\n  }\n}\nconst mem = (globalThis.__seenSitemaps = globalThis.__seenSitemaps || new Set());\nconst out = [];\nfor (const it of $input.all()) {\n  const raw = String(it.json?.sitemap ?? it.json?.url ?? '').trim();\n  if (!raw) continue;\n  const key = normalize(raw);\n  if (!key) continue;\n  if (mem.has(key)) continue;   // already processed in this run\n  mem.add(key);\n  out.push({ json: { sitemap: raw } });\n}\nreturn out;"
+       "jsCode": "/**\n * Filter NEW sitemap URLs to prevent infinite loop\n * - Normalizes URL (scheme/host lower, strip query/hash/trailing slash)\n * - Persists a per-execution \"seen\" set via workflow static data\n * - Dedupes across all passes of this node during the same run\n */\nfunction normalize(u) {\n  const trimmed = String(u || '').trim().replace(/^\"+|\"+$/g, '');\n  if (!trimmed) return '';\n  try {\n    const url = new URL(trimmed);\n    if (!/^https?:$/i.test(url.protocol)) return '';\n    url.hash = '';\n    url.search = '';\n    url.pathname = (url.pathname || '/').replace(/\\/+$/, '') || '/';\n    return url.toString().toLowerCase();\n  } catch (e) {\n    return trimmed.split('#')[0].split('?')[0].replace(/\\/+$/, '').toLowerCase();\n  }\n}\n\nconst staticData = this.getWorkflowStaticData('node');\nconst executionId = this.getExecutionId ? this.getExecutionId() : undefined;\nif (!staticData.__execId || staticData.__execId !== executionId) {\n  staticData.__execId = executionId;\n  staticData.seen = [];\n}\n\nconst seen = new Set(Array.isArray(staticData.seen) ? staticData.seen : []);\nconst out = [];\n\nfor (const it of $input.all()) {\n  const raw = String(it.json?.sitemap ?? it.json?.url ?? '').trim();\n  if (!raw) continue;\n  const key = normalize(raw);\n  if (!key) continue;\n  if (seen.has(key)) continue;\n  seen.add(key);\n  out.push({ json: { sitemap: raw } });\n}\n\nstaticData.seen = Array.from(seen);\nreturn out;"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -1202,18 +1187,6 @@
         ]
       ]
     },
-    "Split In Batches (Sitemap urls)": {
-      "main": [
-        [
-          {
-            "node": "HTTP Request: Fetch sitemap",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        []
-      ]
-    },
     "IF: kind == sitemap ?": {
       "main": [
         [
@@ -1347,7 +1320,7 @@
       "main": [
         [
           {
-            "node": "Split In Batches (Sitemap urls)",
+            "node": "Code: Filter New sitemaps",
             "type": "main",
             "index": 0
           }
@@ -1376,7 +1349,7 @@
       "main": [
         [
           {
-            "node": "Split In Batches (Sitemap urls)",
+            "node": "HTTP Request: Fetch sitemap",
             "type": "main",
             "index": 0
           }
