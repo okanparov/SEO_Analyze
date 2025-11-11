@@ -588,106 +588,6 @@
     },
     {
       "parameters": {
-        "url": "={{$json.sitemap}}",
-        "options": {
-          "response": {
-            "response": {
-              "neverError": true,
-              "responseFormat": "file"
-            }
-          }
-        }
-      },
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [
-        1056,
-        608
-      ],
-      "id": "95bb4e0e-a6fe-46bc-9082-4660019e358e",
-      "name": "HTTP Request: Fetch sitemap"
-    },
-    {
-      "parameters": {
-        "operation": "xml",
-        "binaryPropertyName": "XML",
-        "destinationKey": "parsed",
-        "options": {}
-      },
-      "type": "n8n-nodes-base.extractFromFile",
-      "typeVersion": 1,
-      "position": [
-        1424,
-        608
-      ],
-      "id": "9fb13905-3e56-4f17-8042-25285eb4bc87",
-      "name": "XML → JSON",
-      "alwaysOutputData": false
-    },
-    {
-      "parameters": {
-        "jsCode": "// XML → JSON node'undan gelen ham XML metni (veya binary'den çözülen dize)\nconst xml = String($json.parsed || $json.XML || $json.data || '').trim();\nconst out = [];\nif (!xml) {\n  return [{ json: { kind: 'none' } }];\n}\n\n// Basit entity decode\nconst decode = s => String(s).replace(/&amp;/g,'&').trim();\n\n// <loc> toplayıcı (hem urlset hem index için)\nconst collect = (txt, tag) => {\n  const re = new RegExp(`<${tag}>[\\\\s\\\\S]*?<\\\\/${tag}>`, 'gi');\n  const blocks = txt.match(re) || [];\n  const locs = [];\n  for (const b of blocks) {\n    const m = b.match(/<loc[^>]*>([\\s\\S]*?)<\\/loc>/i);\n    if (m) locs.push(decode(m[1]));\n  }\n  return locs;\n};\n\n// sitemapindex mi?\nconst isIndex = /<\\s*sitemapindex[\\s>]/i.test(xml);\nconst isUrlset = /<\\s*urlset[\\s>]/i.test(xml);\n\n// Çıkışları üret\nif (isIndex) {\n  for (const u of collect(xml, 'sitemap')) {\n    out.push({ json: { kind: 'sitemap', sitemap: u } });\n  }\n} else if (isUrlset) {\n  for (const u of collect(xml, 'url')) {\n    out.push({ json: { kind: 'page', url: u } });\n  }\n} else {\n  // Beklenmeyen gövde (404 sayfası vs.) → sessiz geç\n  out.push({ json: { kind: 'none' } });\n}\n\nreturn out;\n"
-      },
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        1616,
-        608
-      ],
-      "id": "301de7b9-5e0d-4d2f-83d1-31cfec8d3184",
-      "name": "Code: Normalize sitemap content to URLs or inner sitemaps",
-      "alwaysOutputData": true
-    },
-    {
-      "parameters": {
-        "conditions": {
-          "options": {
-            "caseSensitive": true,
-            "leftValue": "",
-            "typeValidation": "strict",
-            "version": 2
-          },
-          "conditions": [
-            {
-              "id": "c2945e66-603f-459f-8ac2-69a9d8d95909",
-              "leftValue": "={{$json.kind}}",
-              "rightValue": "=sitemap",
-              "operator": {
-                "type": "string",
-                "operation": "equals",
-                "name": "filter.operator.equals"
-              }
-            }
-          ],
-          "combinator": "and"
-        },
-        "options": {}
-      },
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 2.2,
-      "position": [
-        1808,
-        608
-      ],
-      "id": "509689c9-fc05-4d65-ac41-bfbf2efa4cab",
-      "name": "IF: kind == sitemap ?"
-    },
-    {
-      "parameters": {
-        "batchSize": 30,
-        "options": {}
-      },
-      "type": "n8n-nodes-base.splitInBatches",
-      "typeVersion": 3,
-      "position": [
-        800,
-        592
-      ],
-      "id": "eaedc308-318b-4cc6-8e09-6beb95f56900",
-      "name": "Split In Batches (Sitemap urls)"
-    },
-    {
-      "parameters": {
         "jsCode": "const seen = new Set();\nconst out = [];\n\nfor (const it of $input.all()) {\n  const u = String(it.json.url || '').trim();\n  if (!u || seen.has(u)) continue;\n  seen.add(u);\n  out.push({ json: { url: u } });\n}\nreturn out;\n"
       },
       "type": "n8n-nodes-base.code",
@@ -698,29 +598,6 @@
       ],
       "id": "89f22e57-f756-4cbd-aa70-f7baff209c97",
       "name": "Item Lists → Filter & Unique"
-    },
-    {
-      "parameters": {
-        "assignments": {
-          "assignments": [
-            {
-              "id": "ce2f01e9-f3e3-4461-93bc-be91d26df520",
-              "name": "XML",
-              "value": "data",
-              "type": "binary"
-            }
-          ]
-        },
-        "options": {}
-      },
-      "type": "n8n-nodes-base.set",
-      "typeVersion": 3.4,
-      "position": [
-        1248,
-        608
-      ],
-      "id": "ab8c65aa-e874-48de-bbb2-77e2b01fb097",
-      "name": "Prepare XML"
     },
     {
       "parameters": {
@@ -918,16 +795,16 @@
     },
     {
       "parameters": {
-        "jsCode": "/**\n * Filter NEW sitemap URLs to prevent infinite loop\n * - Keeps an in-execution memory on the node VM (globalThis)\n * - Dedupes across all passes of this node during the same run\n */\nconst mem = (globalThis.__seenSitemaps = globalThis.__seenSitemaps || new Set());\n\nconst out = [];\nfor (const it of $input.all()) {\n  const s = String(it.json?.sitemap || '').trim();\n  if (!s) continue;\n  if (mem.has(s)) continue;   // already processed in this run\n  mem.add(s);\n  out.push({ json: { sitemap: s } });\n}\n\nreturn out;\n"
+        "jsCode": "// Crawl sitemap XML recursively and return page URLs on the same host\nconst rootItem = $items('Root URL', 0, 0);\nconst rootRaw = String(rootItem?.json?.root || '').trim();\nconst rootBase = rootRaw.replace(/\\/+$/, '');\nlet defaultBase = rootBase;\nif (defaultBase && !/^https?:\\/\\//i.test(defaultBase)) {\n  defaultBase = `https://${defaultBase}`;\n}\nlet allowedHost = '';\ntry {\n  allowedHost = defaultBase ? new URL(defaultBase).hostname.toLowerCase() : '';\n} catch {\n  allowedHost = '';\n}\nfunction normalizeUrl(input) {\n  try {\n    const url = new URL(String(input));\n    if (!/^https?:$/i.test(url.protocol)) return '';\n    url.hash = '';\n    url.search = '';\n    url.pathname = (url.pathname || '/').replace(/\\/+$/, '') || '/';\n    return url.toString();\n  } catch {\n    return '';\n  }\n}\nfunction absolutize(raw, base) {\n  if (!raw) return '';\n  let value = String(raw)\n    .replace(/<!\\[CDATA\\[([\\s\\S]*?)\\]\\]>/gi, '$1')\n    .replace(/^\"+|\"+$/g, '')\n    .replace(/&amp;/gi, '&')\n    .trim();\n  if (!value) return '';\n  try {\n    const abs = base ? new URL(value, base).toString() : new URL(value).toString();\n    return abs;\n  } catch {\n    if (defaultBase) {\n      try { return new URL(value, defaultBase).toString(); }\n      catch { return ''; }\n    }\n    return '';\n  }\n}\nfunction hostAllowed(url) {\n  if (!allowedHost) return true;\n  try {\n    return new URL(url).hostname.toLowerCase() === allowedHost;\n  } catch {\n    return false;\n  }\n}\nconst initialItems = $input.all();\nconst queue = [];\nconst seenSitemaps = new Set();\nconst pageSet = new Set();\nconst MAX_SITEMAPS = 400;\nconst MAX_PAGES = 10000;\nfor (const item of initialItems) {\n  const raw = item.json?.sitemap ?? item.json?.url ?? '';\n  const abs = absolutize(raw, defaultBase);\n  const norm = normalizeUrl(abs);\n  if (!norm || !hostAllowed(norm)) continue;\n  queue.push(norm);\n}\nif (!queue.length && defaultBase) {\n  const fallback = normalizeUrl(defaultBase);\n  if (fallback) queue.push(fallback);\n}\nconst request = this.helpers.request;\nasync function fetchText(url) {\n  try {\n    const response = await request.call(this, {\n      method: 'GET',\n      url,\n      headers: {\n        'Accept': 'application/xml,text/xml;q=0.9,*/*;q=0.1',\n        'User-Agent': 'n8n SEO crawler/1.0'\n      },\n      timeout: 15000,\n      returnFullResponse: false,\n      encoding: 'utf8'\n    });\n    if (typeof response === 'string') return response;\n    if (response?.data && typeof response.data === 'string') return response.data;\n    if (Buffer.isBuffer(response)) return response.toString('utf8');\n    if (response?.body && typeof response.body === 'string') return response.body;\n    return String(response || '');\n  } catch (error) {\n    return '';\n  }\n}\nfunction collectMatches(text, regex) {\n  const results = [];\n  let match;\n  while ((match = regex.exec(text))) {\n    results.push(match[1]);\n  }\n  return results;\n}\nasync function crawl() {\n  while (queue.length && seenSitemaps.size < MAX_SITEMAPS && pageSet.size < MAX_PAGES) {\n    const current = queue.shift();\n    const normCurrent = normalizeUrl(current);\n    if (!normCurrent || seenSitemaps.has(normCurrent)) continue;\n    seenSitemaps.add(normCurrent);\n    const xml = await fetchText.call(this, current);\n    if (!xml) continue;\n    const sitemapBlocks = collectMatches(xml, /<sitemap[\\s\\S]*?<loc[^>]*>([\\s\\S]*?)<\\/loc>/gi);\n    for (const block of sitemapBlocks) {\n      const abs = absolutize(block, current);\n      const norm = normalizeUrl(abs);\n      if (!norm || !hostAllowed(norm) || seenSitemaps.has(norm)) continue;\n      queue.push(norm);\n    }\n    const urlBlocks = collectMatches(xml, /<url[\\s\\S]*?<loc[^>]*>([\\s\\S]*?)<\\/loc>/gi);\n    for (const block of urlBlocks) {\n      const abs = absolutize(block, current);\n      const norm = normalizeUrl(abs);\n      if (!norm || !hostAllowed(norm)) continue;\n      pageSet.add(norm);\n    }\n    if (!sitemapBlocks.length && !urlBlocks.length) {\n      const locBlocks = collectMatches(xml, /<loc[^>]*>([\\s\\S]*?)<\\/loc>/gi);\n      for (const block of locBlocks) {\n        const abs = absolutize(block, current);\n        const norm = normalizeUrl(abs);\n        if (!norm || !hostAllowed(norm)) continue;\n        pageSet.add(norm);\n      }\n    }\n  }\n}\nawait crawl.call(this);\nconst pages = Array.from(pageSet).slice(0, MAX_PAGES);\nif (!pages.length && defaultBase) {\n  const fallback = normalizeUrl(defaultBase);\n  if (fallback) pages.push(fallback);\n}\nreturn pages.map(url => ({ json: { url } }));"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        512,
-        592
+        1600,
+        672
       ],
-      "id": "b042dc26-b8af-4f18-abad-58b107df21a5",
-      "name": "Code: Filter New sitemaps"
+      "id": "b8c3c2c8-7fc8-4a66-9e2c-9c0d3f7da7d5",
+      "name": "Code: Crawl sitemap tree"
     }
   ],
   "pinData": {},
@@ -976,9 +853,7 @@
       ]
     },
     "Respond to Webhook (JSON)": {
-      "main": [
-        []
-      ]
+      "main": []
     },
     "HTTP Request": {
       "main": [
@@ -1111,14 +986,10 @@
       ]
     },
     "Send email about weekly trend": {
-      "main": [
-        []
-      ]
+      "main": []
     },
     "Send email about Weekly Recommndations": {
-      "main": [
-        []
-      ]
+      "main": []
     },
     "Merge1": {
       "main": [
@@ -1169,80 +1040,6 @@
         ]
       ]
     },
-    "HTTP Request: Fetch sitemap": {
-      "main": [
-        [
-          {
-            "node": "Prepare XML",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "XML → JSON": {
-      "main": [
-        [
-          {
-            "node": "Code: Normalize sitemap content to URLs or inner sitemaps",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Code: Normalize sitemap content to URLs or inner sitemaps": {
-      "main": [
-        [
-          {
-            "node": "IF: kind == sitemap ?",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Split In Batches (Sitemap urls)": {
-      "main": [
-        [],
-        [
-          {
-            "node": "HTTP Request: Fetch sitemap",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "IF: kind == sitemap ?": {
-      "main": [
-        [
-          {
-            "node": "Code: Filter New sitemaps",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "Code: Normalize URL pageler icin",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Prepare XML": {
-      "main": [
-        [
-          {
-            "node": "XML → JSON",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
     "Item Lists → Filter & Unique": {
       "main": [
         [
@@ -1256,7 +1053,6 @@
     },
     "Split in Batches (pages)": {
       "main": [
-        [],
         [
           {
             "node": "Wait",
@@ -1347,14 +1143,7 @@
       "main": [
         [
           {
-            "node": "Split In Batches (Sitemap urls)",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "Code: Build sitemap candidates (False koluna)",
+            "node": "Code: Crawl sitemap tree",
             "type": "main",
             "index": 0
           }
@@ -1368,15 +1157,20 @@
             "node": "HTTP Request (Homepage)",
             "type": "main",
             "index": 0
+          },
+          {
+            "node": "Code: Crawl sitemap tree",
+            "type": "main",
+            "index": 0
           }
         ]
       ]
     },
-    "Code: Filter New sitemaps": {
+    "Code: Crawl sitemap tree": {
       "main": [
         [
           {
-            "node": "Split In Batches (Sitemap urls)",
+            "node": "Code: Normalize URL pageler icin",
             "type": "main",
             "index": 0
           }
