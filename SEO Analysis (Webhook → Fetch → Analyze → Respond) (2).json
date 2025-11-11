@@ -588,6 +588,92 @@
     },
     {
       "parameters": {
+        "url": "={{$json.sitemap}}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "responseFormat": "file"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1056,
+        608
+      ],
+      "id": "95bb4e0e-a6fe-46bc-9082-4660019e358e",
+      "name": "HTTP Request: Fetch sitemap"
+    },
+    {
+      "parameters": {
+        "operation": "xml",
+        "binaryPropertyName": "XML",
+        "destinationKey": "parsed",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [
+        1424,
+        608
+      ],
+      "id": "9fb13905-3e56-4f17-8042-25285eb4bc87",
+      "name": "XML → JSON",
+      "alwaysOutputData": false
+    },
+    {
+      "parameters": {
+        "jsCode": "// XML → JSON node'undan gelen içerik hem düz string hem de parse edilmiş obje olabilir\nconst parsed = $json.parsed;\nconst rawData = $json.data || $json.XML || '';\n\nconst out = [];\nconst seen = new Set();\n\nconst decode = (value) => String(value || '')\n  .replace(/^\"+|\"+$/g, '')\n  .replace(/&amp;/g, '&')\n  .trim();\n\nconst emit = (kind, value) => {\n  const url = decode(value);\n  if (!url) return;\n  const key = `${kind}|${url.toLowerCase()}`;\n  if (seen.has(key)) return;\n  seen.add(key);\n  if (kind === 'sitemap') out.push({ json: { kind: 'sitemap', sitemap: url } });\n  else out.push({ json: { kind: 'page', url } });\n};\n\nconst asString = (input) => {\n  if (typeof input === 'string') return input;\n  if (input && typeof input === 'object') {\n    if (input.data && typeof input.data === 'string') {\n      try { return Buffer.from(input.data, 'base64').toString('utf8'); }\n      catch { return ''; }\n    }\n  }\n  return '';\n};\n\n// 1) Eğer string XML geldiyse regex ile ayıkla\nconst xmlText = (typeof parsed === 'string' && parsed.trim()) ? parsed.trim()\n  : asString(rawData).trim();\n\nif (xmlText) {\n  const hasIndex = /<\\s*sitemapindex\\b/i.test(xmlText);\n  const hasUrlset = /<\\s*urlset\\b/i.test(xmlText);\n\n  if (hasIndex) {\n    const re = /<sitemap[\\s\\S]*?<loc[^>]*>([\\s\\S]*?)<\\/loc>/gi;\n    let m;\n    while ((m = re.exec(xmlText))) emit('sitemap', m[1]);\n  }\n  if (hasUrlset || (!hasIndex && !out.length)) {\n    const re = /<url[\\s\\S]*?<loc[^>]*>([\\s\\S]*?)<\\/loc>/gi;\n    let m;\n    while ((m = re.exec(xmlText))) emit('page', m[1]);\n  }\n}\n\n// 2) Parse edilmiş obje ise dolaşarak loc alanlarını yakala\nconst visited = new WeakSet();\nconst walk = (node, ctx = '') => {\n  if (!node) return;\n  if (visited.has(node)) return;\n  if (Array.isArray(node)) {\n    for (const item of node) walk(item, ctx);\n    return;\n  }\n  if (typeof node !== 'object') return;\n\n  visited.add(node);\n\n  const nextCtx = (key) => {\n    const lower = String(key || ctx || '').toLowerCase();\n    if (lower.includes('sitemap')) return 'sitemap';\n    if (lower.includes('url')) return 'url';\n    return ctx;\n  };\n\n  if (Object.prototype.hasOwnProperty.call(node, 'loc')) {\n    const locValue = node.loc;\n    const arr = Array.isArray(locValue) ? locValue : [locValue];\n    const kind = ctx === 'sitemap' ? 'sitemap' : (ctx === 'url' ? 'page' : 'page');\n    for (const value of arr) emit(kind, value);\n  }\n\n  for (const [key, value] of Object.entries(node)) {\n    if (key === 'loc') continue;\n    walk(value, nextCtx(key));\n  }\n};\n\nif (parsed && typeof parsed === 'object') walk(parsed);\n\nif (!out.length) return [{ json: { kind: 'none' } }];\nreturn out;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1616,
+        608
+      ],
+      "id": "301de7b9-5e0d-4d2f-83d1-31cfec8d3184",
+      "name": "Code: Normalize sitemap content to URLs or inner sitemaps",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c2945e66-603f-459f-8ac2-69a9d8d95909",
+              "leftValue": "={{$json.kind}}",
+              "rightValue": "=sitemap",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1808,
+        608
+      ],
+      "id": "509689c9-fc05-4d65-ac41-bfbf2efa4cab",
+      "name": "IF: kind == sitemap ?"
+    },
+    {
+      "parameters": {
         "jsCode": "const seen = new Set();\nconst out = [];\n\nfor (const it of $input.all()) {\n  const u = String(it.json.url || '').trim();\n  if (!u || seen.has(u)) continue;\n  seen.add(u);\n  out.push({ json: { url: u } });\n}\nreturn out;\n"
       },
       "type": "n8n-nodes-base.code",
@@ -794,8 +880,7 @@
       "name": "Code: Build sitemap candidates (False koluna)"
     },
     {
-      "parameters": {
-        "jsCode": "// Crawl sitemap XML recursively and return page URLs on the same host\nconst rootItem = $items('Root URL', 0, 0);\nconst rootRaw = String(rootItem?.json?.root || '').trim();\nconst rootBase = rootRaw.replace(/\\/+$/, '');\nlet defaultBase = rootBase;\nif (defaultBase && !/^https?:\\/\\//i.test(defaultBase)) {\n  defaultBase = `https://${defaultBase}`;\n}\nlet allowedHost = '';\ntry {\n  allowedHost = defaultBase ? new URL(defaultBase).hostname.toLowerCase() : '';\n} catch {\n  allowedHost = '';\n}\nfunction normalizeUrl(input) {\n  try {\n    const url = new URL(String(input));\n    if (!/^https?:$/i.test(url.protocol)) return '';\n    url.hash = '';\n    url.search = '';\n    url.pathname = (url.pathname || '/').replace(/\\/+$/, '') || '/';\n    return url.toString();\n  } catch {\n    return '';\n  }\n}\nfunction absolutize(raw, base) {\n  if (!raw) return '';\n  let value = String(raw)\n    .replace(/<!\\[CDATA\\[([\\s\\S]*?)\\]\\]>/gi, '$1')\n    .replace(/^\"+|\"+$/g, '')\n    .replace(/&amp;/gi, '&')\n    .trim();\n  if (!value) return '';\n  try {\n    const abs = base ? new URL(value, base).toString() : new URL(value).toString();\n    return abs;\n  } catch {\n    if (defaultBase) {\n      try { return new URL(value, defaultBase).toString(); }\n      catch { return ''; }\n    }\n    return '';\n  }\n}\nfunction hostAllowed(url) {\n  if (!allowedHost) return true;\n  try {\n    return new URL(url).hostname.toLowerCase() === allowedHost;\n  } catch {\n    return false;\n  }\n}\nconst initialItems = $input.all();\nconst queue = [];\nconst seenSitemaps = new Set();\nconst pageSet = new Set();\nconst MAX_SITEMAPS = 400;\nconst MAX_PAGES = 10000;\nfor (const item of initialItems) {\n  const raw = item.json?.sitemap ?? item.json?.url ?? '';\n  const abs = absolutize(raw, defaultBase);\n  const norm = normalizeUrl(abs);\n  if (!norm || !hostAllowed(norm)) continue;\n  queue.push(norm);\n}\nif (!queue.length && defaultBase) {\n  const fallback = normalizeUrl(defaultBase);\n  if (fallback) queue.push(fallback);\n}\nconst request = this.helpers.request;\nasync function fetchText(url) {\n  try {\n    const response = await request.call(this, {\n      method: 'GET',\n      url,\n      headers: {\n        'Accept': 'application/xml,text/xml;q=0.9,*/*;q=0.1',\n        'User-Agent': 'n8n SEO crawler/1.0'\n      },\n      timeout: 15000,\n      returnFullResponse: false,\n      encoding: 'utf8'\n    });\n    if (typeof response === 'string') return response;\n    if (response?.data && typeof response.data === 'string') return response.data;\n    if (Buffer.isBuffer(response)) return response.toString('utf8');\n    if (response?.body && typeof response.body === 'string') return response.body;\n    return String(response || '');\n  } catch (error) {\n    return '';\n  }\n}\nfunction collectMatches(text, regex) {\n  const results = [];\n  let match;\n  while ((match = regex.exec(text))) {\n    results.push(match[1]);\n  }\n  return results;\n}\nasync function crawl() {\n  while (queue.length && seenSitemaps.size < MAX_SITEMAPS && pageSet.size < MAX_PAGES) {\n    const current = queue.shift();\n    const normCurrent = normalizeUrl(current);\n    if (!normCurrent || seenSitemaps.has(normCurrent)) continue;\n    seenSitemaps.add(normCurrent);\n    const xml = await fetchText.call(this, current);\n    if (!xml) continue;\n    const sitemapBlocks = collectMatches(xml, /<sitemap[\\s\\S]*?<loc[^>]*>([\\s\\S]*?)<\\/loc>/gi);\n    for (const block of sitemapBlocks) {\n      const abs = absolutize(block, current);\n      const norm = normalizeUrl(abs);\n      if (!norm || !hostAllowed(norm) || seenSitemaps.has(norm)) continue;\n      queue.push(norm);\n    }\n    const urlBlocks = collectMatches(xml, /<url[\\s\\S]*?<loc[^>]*>([\\s\\S]*?)<\\/loc>/gi);\n    for (const block of urlBlocks) {\n      const abs = absolutize(block, current);\n      const norm = normalizeUrl(abs);\n      if (!norm || !hostAllowed(norm)) continue;\n      pageSet.add(norm);\n    }\n    if (!sitemapBlocks.length && !urlBlocks.length) {\n      const locBlocks = collectMatches(xml, /<loc[^>]*>([\\s\\S]*?)<\\/loc>/gi);\n      for (const block of locBlocks) {\n        const abs = absolutize(block, current);\n        const norm = normalizeUrl(abs);\n        if (!norm || !hostAllowed(norm)) continue;\n        pageSet.add(norm);\n      }\n    }\n  }\n}\nawait crawl.call(this);\nconst pages = Array.from(pageSet).slice(0, MAX_PAGES);\nif (!pages.length && defaultBase) {\n  const fallback = normalizeUrl(defaultBase);\n  if (fallback) pages.push(fallback);\n}\nreturn pages.map(url => ({ json: { url } }));"
+       "jsCode": "/**\n * Filter NEW sitemap URLs to prevent infinite loop\n * - Normalizes URL (scheme/host lower, strip query/hash/trailing slash)\n * - Persists a per-execution \"seen\" set via workflow static data\n * - Dedupes across all passes of this node during the same run\n */\nfunction normalize(u) {\n  const trimmed = String(u || '').trim().replace(/^\"+|\"+$/g, '');\n  if (!trimmed) return '';\n  try {\n    const url = new URL(trimmed);\n    if (!/^https?:$/i.test(url.protocol)) return '';\n    url.hash = '';\n    url.search = '';\n    url.pathname = (url.pathname || '/').replace(/\\/+$/, '') || '/';\n    return url.toString().toLowerCase();\n  } catch (e) {\n    return trimmed.split('#')[0].split('?')[0].replace(/\\/+$/, '').toLowerCase();\n  }\n}\n\nconst staticData = this.getWorkflowStaticData('node');\nconst executionId = this.getExecutionId ? this.getExecutionId() : undefined;\nif (!staticData.__execId || staticData.__execId !== executionId) {\n  staticData.__execId = executionId;\n  staticData.seen = [];\n}\n\nconst seen = new Set(Array.isArray(staticData.seen) ? staticData.seen : []);\nconst out = [];\n\nfor (const it of $input.all()) {\n  const raw = String(it.json?.sitemap ?? it.json?.url ?? '').trim();\n  if (!raw) continue;\n  const key = normalize(raw);\n  if (!key) continue;\n  if (seen.has(key)) continue;\n  seen.add(key);\n  out.push({ json: { sitemap: raw } });\n}\n\nstaticData.seen = Array.from(seen);\nreturn out;"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -1040,6 +1125,68 @@
         ]
       ]
     },
+    "HTTP Request: Fetch sitemap": {
+      "main": [
+        [
+          {
+            "node": "Prepare XML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "XML → JSON": {
+      "main": [
+        [
+          {
+            "node": "Code: Normalize sitemap content to URLs or inner sitemaps",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: Normalize sitemap content to URLs or inner sitemaps": {
+      "main": [
+        [
+          {
+            "node": "IF: kind == sitemap ?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF: kind == sitemap ?": {
+      "main": [
+        [
+          {
+            "node": "Code: Filter New sitemaps",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code: Normalize URL pageler icin",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare XML": {
+      "main": [
+        [
+          {
+            "node": "XML → JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
     "Item Lists → Filter & Unique": {
       "main": [
         [
@@ -1143,7 +1290,7 @@
       "main": [
         [
           {
-            "node": "Code: Crawl sitemap tree",
+            "node": "Code: Filter New sitemaps",
             "type": "main",
             "index": 0
           }
@@ -1182,7 +1329,7 @@
       "main": [
         [
           {
-            "node": "Code: Normalize URL pageler icin",
+            "node": "HTTP Request: Fetch sitemap",
             "type": "main",
             "index": 0
           }
