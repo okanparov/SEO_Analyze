@@ -687,29 +687,6 @@
     },
     {
       "parameters": {
-        "assignments": {
-          "assignments": [
-            {
-              "id": "ce2f01e9-f3e3-4461-93bc-be91d26df520",
-              "name": "XML",
-              "value": "data",
-              "type": "binary"
-            }
-          ]
-        },
-        "options": {}
-      },
-      "type": "n8n-nodes-base.set",
-      "typeVersion": 3.4,
-      "position": [
-        1248,
-        608
-      ],
-      "id": "ab8c65aa-e874-48de-bbb2-77e2b01fb097",
-      "name": "Prepare XML"
-    },
-    {
-      "parameters": {
         "batchSize": 100,
         "options": {}
       },
@@ -908,11 +885,11 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        512,
-        592
+        1600,
+        672
       ],
-      "id": "b042dc26-b8af-4f18-abad-58b107df21a5",
-      "name": "Code: Filter New sitemaps"
+      "id": "b8c3c2c8-7fc8-4a66-9e2c-9c0d3f7da7d5",
+      "name": "Code: Crawl sitemap tree"
     }
   ],
   "pinData": {},
@@ -961,9 +938,7 @@
       ]
     },
     "Respond to Webhook (JSON)": {
-      "main": [
-        []
-      ]
+      "main": []
     },
     "HTTP Request": {
       "main": [
@@ -1096,14 +1071,10 @@
       ]
     },
     "Send email about weekly trend": {
-      "main": [
-        []
-      ]
+      "main": []
     },
     "Send email about Weekly Recommndations": {
-      "main": [
-        []
-      ]
+      "main": []
     },
     "Merge1": {
       "main": [
@@ -1229,7 +1200,6 @@
     },
     "Split in Batches (pages)": {
       "main": [
-        [],
         [
           {
             "node": "Wait",
@@ -1330,6 +1300,11 @@
             "node": "Code: Build sitemap candidates (False koluna)",
             "type": "main",
             "index": 0
+          },
+          {
+            "node": "Code: Crawl sitemap tree",
+            "type": "main",
+            "index": 0
           }
         ]
       ]
@@ -1341,11 +1316,16 @@
             "node": "HTTP Request (Homepage)",
             "type": "main",
             "index": 0
+          },
+          {
+            "node": "Code: Crawl sitemap tree",
+            "type": "main",
+            "index": 0
           }
         ]
       ]
     },
-    "Code: Filter New sitemaps": {
+    "Code: Crawl sitemap tree": {
       "main": [
         [
           {
